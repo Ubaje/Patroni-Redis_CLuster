@@ -1,0 +1,291 @@
+# Patroni + Redis Cluster Setup
+
+This project provides a complete setup for running a highly available PostgreSQL cluster using Patroni alongside a Redis Cluster, all orchestrated with Docker Compose. A production-ready database cluster implementing complex cryptographic schemas and high-availability features.
+
+## 🏗️ Architecture
+
+The setup consists of multiple integrated components:
+
+### 1. Patroni PostgreSQL Cluster
+
+- **PostgreSQL 17.4**: 3-node cluster with Patroni for automatic failover
+- HAProxy for load balancing and automatic failover
+- etcd for distributed configuration storage
+- PgBouncer for connection pooling
+
+### 2. Redis Cluster
+
+- **Redis**: 6-node cluster (3 masters, 3 slaves) for caching and distributed data
+- HAProxy for Redis load balancing
+- Includes data generation utilities with 100,000 synthetic records
+
+### 3. Security & Service Discovery
+
+- **Consul**: Service discovery and distributed configuration
+- **Vault**: Secret management and encryption
+- **TLS/SSL support** for production deployments
+
+## Prerequisites
+
+- Docker
+- Docker Compose
+- Bash shell
+- Node.js (for data generation scripts)
+
+## 📁 Project Structure
+
+```
+.
+├── compose.yml              # Main Docker Compose configuration
+├── postgres/
+│   ├── dockerfile          # PostgreSQL node Dockerfile
+│   ├── haproxy.cfg        # HAProxy configuration for PostgreSQL
+│   ├── patroni_setup.sh   # Patroni initialization script
+│   ├── patroni.yml        # Patroni node configuration
+│   ├── package.json       # PostgreSQL dependencies
+│   ├── setup_schema.js    # Complex schema setup
+│   ├── knexfile.js        # Knex ORM configuration
+│   ├── schema.sql         # SQL schema definition
+│   └── README.md
+├── redis/
+│   ├── dockerfile.redis_data_entry  # Redis data entry container
+│   ├── generate_redis_data.js       # Data generation script
+│   ├── haproxy.cfg                  # HAProxy configuration for Redis
+│   ├── package.json                 # Node.js dependencies
+│   ├── redis_setup.sh              # Redis cluster setup script
+│   ├── redis.sh                    # Redis initialization script
+│   └── README.md
+```
+
+## 🚀 Quick Start
+
+### 1. Start the Cluster
+```bash
+docker-compose up -d
+```
+
+### 2. Setup Data (Automated)
+```bash
+docker-compose run redis-data-entry
+```
+
+## 🐳 Docker Operations
+
+### Complete Docker Deployment
+
+#### 1. Start the Full Infrastructure
+```bash
+# Start all services (Consul, Vault, PostgreSQL cluster, Redis cluster)
+docker compose up -d
+
+# View logs from all services
+docker compose logs -f
+
+# Check service status
+docker compose ps
+```
+
+#### 2. Data Population via Docker
+
+**Option A: Using Custom Data Entry Containers**
+```bash
+# Build the data entry containers
+docker build -f dockerfiles/Dockerfile.redis-setup -t perconi-redis-data-entry .
+docker build -f dockerfiles/Dockerfile.postgres-setup -t perconi-postgres-data-entry .
+
+# Populate Redis with 100,000 synthetic records
+docker run --rm --network perconi_cache \
+  -e REDIS_HOSTS="redis1:7001,redis2:7002,redis3:7003,redis4:7004,redis5:7005,redis6:7006" \
+  perconi-redis-data-entry
+
+# Setup PostgreSQL schema and insert test data
+docker run --rm --network perconi_database \
+  -e POSTGRES_HOST=postgres-haproxy \
+  -e POSTGRES_PORT=5000 \
+  -e POSTGRES_DB=postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=supersecret \
+  perconi-postgres-data-entry
+```
+
+**Option B: Using Existing Containers**
+```bash
+# Redis data generation
+docker exec -it perconi-redis1-1 redis-cli --cluster info
+
+# PostgreSQL operations  
+docker exec -it postgres1 psql -U postgres -c "SELECT COUNT(*) FROM users;"
+```
+
+## Component Details
+
+### Patroni PostgreSQL Cluster
+
+- Provides automatic failover with **PostgreSQL 17.4**
+- Ensures high availability of PostgreSQL database
+- Uses consul for cluster coordination
+- HAProxy handles load balancing
+- **UUID4** primary keys using `gen_random_uuid()`
+- **19-character UIN** with ISO 1271_36 checksum validation
+- **Multi-layer cryptographic hash**: `H = RIPEMD160(SHA3-512(SHA3-256(uin)))`
+- **Complex validation** and constraints
+
+### Redis Cluster
+
+- **6-node distributed** Redis setup (3 masters, 3 slaves)
+- **100,000 synthetic records** with realistic data
+- Includes data generation utilities
+- Load balanced through HAProxy
+- Automatic sharding and replication
+- **Gender distribution**: 65% male, 35% female
+
+## 🔗 Accessing Services
+
+### PostgreSQL
+
+- **HAProxy Load Balancer**: localhost:5000 (recommended)
+- **Direct Access**:
+  - Primary node: localhost:5432
+  - Replica nodes: localhost:5433, localhost:5434
+- HAProxy stats: localhost:8404
+
+### Redis
+
+- **Redis Cluster nodes**: localhost:7001-7006
+- **Cluster access**: `redis-cli -c -h localhost -p 7001`
+- HAProxy stats: localhost:7001
+
+### Additional Services
+
+- **Consul UI**: localhost:8500
+- **Vault API**: localhost:8200
+
+## 📊 Features & Data Schema
+
+### Users Table Structure
+```sql
+CREATE TABLE users (
+    uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- UUID4
+    uin VARCHAR(19) NOT NULL UNIQUE,                 -- UIN with checksum
+    fn VARCHAR(40) NOT NULL,                         -- First name
+    mm VARCHAR(40),                                  -- Middle name
+    sn VARCHAR(40) NOT NULL,                         -- Surname
+    g CHAR(1) CHECK (g IN ('M', 'F', 'O')),         -- Gender
+    n VARCHAR(30),                                   -- Nationality
+    d DATE,                                          -- Date of birth
+    h CHAR(40) NOT NULL,                             -- Crypto hash
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+### Cryptographic Functions
+```javascript
+// UIN Generation: 17 digits + 2-digit checksum
+const uin = generateUIN(); // "12345678901234567XX"
+
+// Hash Computation: Multi-layer cryptography
+const hash = RIPEMD160(SHA3_512(SHA3_256(uin))); // 40 hex chars
+```
+
+## 📈 Monitoring
+
+The cluster includes built-in monitoring and health checks:
+
+- **Patroni REST API**: Cluster status and failover
+- **HAProxy stats**: Connection and load metrics  
+- **Consul health checks**: Service availability
+- **Docker health checks**: Container status
+- Access PostgreSQL HAProxy stats at http://localhost:8404/stats
+- Access Redis HAProxy stats at http://localhost:7001/stats
+
+## Data Generation
+
+The project includes comprehensive data generation utilities:
+
+### Redis Data Generation
+```bash
+docker-compose run redis-data-entry
+# Generates 100,000 synthetic records with realistic distribution
+```
+
+### PostgreSQL Schema Setup
+```bash
+# Setup complex schema with cryptographic features
+npm run setup-postgres
+```
+
+## Configuration
+
+### Patroni
+
+- Configuration file: `postgres/patroni.yml`
+- HAProxy configuration: `postgres/haproxy.cfg`
+- Complex schema: `postgres/schema.sql`
+
+### Redis
+
+- Cluster setup: `redis/redis_setup.sh`
+- HAProxy configuration: `redis/haproxy.cfg`
+- Data generation: `redis/generate_redis_data.js`
+
+### Environment Variables
+
+```yaml
+# PostgreSQL Configuration
+POSTGRES_PASSWORD=supersecret
+POSTGRES_REPLICATION_PASSWORD=replicationpass
+
+# Consul Configuration  
+CONSUL_ENCRYPT_KEY=<base64-encoded-key>
+
+# Vault Configuration
+VAULT_DEV_ROOT_TOKEN_ID=<vault-token>
+VAULT_UNSEAL_KEY=<unseal-key>
+
+# Application Configuration
+REDIS_HOSTS=redis1:7001,redis2:7002,redis3:7003,redis4:7004,redis5:7005,redis6:7006
+```
+
+## 🛠️ Manual Operations
+
+### Individual Package Setup
+```bash
+# Redis only
+npm run setup-redis
+
+# PostgreSQL only  
+npm run setup-postgres
+```
+
+## Maintenance
+
+### Scaling
+
+- To add more PostgreSQL nodes, modify the `compose.yml` file
+- Redis cluster can be scaled by adjusting the cluster configuration
+- Use production compose files for scaling: `docker compose -f compose.yml -f compose.prod.yml up -d`
+
+### Backup and Recovery
+
+- PostgreSQL backups are handled through Patroni
+- Redis persistence is configured for data durability
+- Volume backup: `docker run --rm -v postgres_data:/data -v $(pwd):/backup alpine tar czf /backup/postgres-backup.tar.gz /data`
+
+## Troubleshooting
+
+1. **If PostgreSQL cluster doesn't form:**
+   - Check etcd logs: `docker compose logs etcd`
+   - Verify Patroni configuration: `docker exec postgres1 patronictl -c /etc/patroni/patroni.yml list`
+   - Ensure network connectivity between nodes
+
+2. **If Redis cluster fails to initialize:**
+   - Check Redis logs: `docker compose logs redis1`
+   - Verify cluster ports are accessible
+   - Test cluster: `docker exec redis1 redis-cli --cluster check redis1:7001`
+   - Ensure proper node communication
+
+3. **Service connectivity issues:**
+   - Check Docker networks: `docker network ls | grep perconi`
+   - Verify service discovery: `docker exec consul consul members`
+   - Test HAProxy: `curl http://localhost:8404/stats`

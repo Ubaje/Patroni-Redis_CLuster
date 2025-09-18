@@ -1,0 +1,375 @@
+x-logging: &default-logging
+    driver: "json-file"
+    options:
+        max-size: "10m"
+        max-file: "3"
+
+x-healthcheck-defaults: &healthcheck-defaults
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+
+services:
+    redis-node-1:
+        container_name: redis1
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-1", "7001"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_1:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+        profiles: ["redis"]
+
+    redis-node-2:
+        container_name: redis2
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-2", "7002"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_2:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+        profiles: ["redis"]
+
+    redis-node-3:
+        container_name: redis3
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-3", "7003"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_3:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+        profiles: ["redis"]
+
+    redis-node-4:
+        container_name: redis4
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-4", "7004"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_4:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+        profiles: ["redis"]
+
+    redis-node-5:
+        container_name: redis5
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-5", "7005"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_5:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+
+        profiles: ["redis"]
+    redis-node-6:
+        container_name: redis6
+        image: redis:7.2-alpine
+        command: ["/tmp/redis.sh", "redis-node-6", "7006"]
+        networks:
+            - redis-network
+        volumes:
+            - redis_data_6:/data
+            - ./redis/redis.sh:/tmp/redis.sh
+        profiles: ["redis"]
+
+    redis-cluster-creator:
+        container_name: redis-cluster-creator
+        image: redis:7.2-alpine
+        command: >
+            sh -c "
+            sleep 10 &&
+            redis-cli --cluster create 
+            redis1:7001 redis2:7002 redis3:7003 
+            redis4:7004 redis5:7005 redis6:7006 
+            --cluster-replicas 1 --cluster-yes
+            "
+        networks:
+            - redis-network
+        volumes:
+            - redis_cluster_creator:/data
+        depends_on:
+            - redis-node-1
+            - redis-node-2
+            - redis-node-3
+            - redis-node-4
+            - redis-node-5
+            - redis-node-6
+            - redis-proxy
+        profiles: ["redis"]
+    redis-proxy:
+        container_name: redis-proxy
+        image: haproxy:2.8-alpine
+        volumes:
+            - ./redis/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+        ports:
+            - 8404:8404
+            - 7001-7006:9001-9006
+            - 7101-7106:9101-9106
+        networks:
+            - redis-network
+        depends_on:
+            - redis-node-1
+            - redis-node-2
+            - redis-node-3
+            - redis-node-4
+            - redis-node-5
+            - redis-node-6
+        restart: unless-stopped
+        logging: *default-logging
+        healthcheck:
+            <<: *healthcheck-defaults
+            test:
+                ["CMD", "wget", "-q", "--spider", "http://localhost:8404/stats"]
+        profiles: ["redis"]
+
+    redis-insight:
+        container_name: redis-insight
+        image: redislabs/redisinsight:2.70.1
+        ports:
+            - "5540:5540"
+        networks:
+            - redis-network
+        volumes:
+            - redis_insight_data:/db
+        depends_on:
+            - redis-proxy
+        restart: unless-stopped
+        logging: *default-logging
+        healthcheck:
+            <<: *healthcheck-defaults
+            test: ["CMD", "curl", "-f", "http://localhost:5540"]
+        profiles: ["redis"]
+
+    redis-data-entry:
+        build:
+            context: .
+            dockerfile: redis/dockerfile.redis_data_entry
+        container_name: redis-data-entry
+        networks:
+            - redis-network
+        depends_on:
+            - redis-node-1
+            - redis-node-2
+            - redis-node-3
+            - redis-node-4
+            - redis-node-5
+            - redis-node-6
+            - redis-proxy
+        profiles: ["redis"]
+
+    consul-server-1:
+        image: hashicorp/consul:1.21
+        container_name: consul-server-1
+        networks:
+            - postgres-network
+        ports:
+            - "8500:8500"
+            - "8600:8600/udp"
+        environment:
+            CONSUL_BIND_INTERFACE: eth0
+        command: >
+            consul agent -server -bootstrap-expect=3 -ui -client=0.0.0.0 -data-dir=/consul/data
+            -datacenter=dc1 -encrypt=X4SYOinP2ooXd+Q18t5haFY7j+q7RxhU6yJqqhFKSFE=
+            -retry-join=consul-server-2 -retry-join=consul-server-3
+        volumes:
+            - consul1_data:/consul/data
+        healthcheck:
+            test: ["CMD", "consul", "members"]
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+    consul-server-2:
+        image: hashicorp/consul:1.21
+        container_name: consul-server-2
+        networks:
+            - postgres-network
+        ports:
+            - "8501:8500"
+        environment:
+            CONSUL_BIND_INTERFACE: eth0
+        command: >
+            consul agent -server -bootstrap-expect=3 -ui -client=0.0.0.0 -data-dir=/consul/data
+            -datacenter=dc1 -encrypt=X4SYOinP2ooXd+Q18t5haFY7j+q7RxhU6yJqqhFKSFE=
+            -retry-join=consul-server-1 -retry-join=consul-server-3
+        volumes:
+            - consul2_data:/consul/data
+        healthcheck:
+            test: ["CMD", "consul", "members"]
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+    consul-server-3:
+        image: hashicorp/consul:1.21
+        container_name: consul-server-3
+        networks:
+            - postgres-network
+        ports:
+            - "8502:8500"
+        environment:
+            CONSUL_BIND_INTERFACE: eth0
+        command: >
+            consul agent -server -bootstrap-expect=3 -ui -client=0.0.0.0 -data-dir=/consul/data
+            -datacenter=dc1 -encrypt=X4SYOinP2ooXd+Q18t5haFY7j+q7RxhU6yJqqhFKSFE=
+            -retry-join=consul-server-1 -retry-join=consul-server-2
+        volumes:
+            - consul3_data:/consul/data
+        healthcheck:
+            test: ["CMD", "consul", "members"]
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        restart: unless-stopped
+        profiles: ["postgres"] # Patroni PostgreSQL nodes
+    patroni1:
+        build: ./postgres
+        container_name: patroni1
+        hostname: patroni1
+        networks:
+            - postgres-network
+        ports:
+            - "5432:5432"
+            - "8008:8008"
+        environment:
+            PATRONI_NAME: patroni1
+            PATRONI_SCOPE: postgres-cluster
+            PATRONI_CONSUL_HOST: consul-server-1:8500
+            PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+            PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni1:5432
+            PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+            PATRONI_RESTAPI_CONNECT_ADDRESS: patroni1:8008
+        volumes:
+            - patroni1_data:/var/lib/postgresql/data
+            - ./postgres/patroni.yml:/etc/patroni/patroni.yml
+        depends_on:
+            consul-server-1:
+                condition: service_healthy
+            consul-server-2:
+                condition: service_healthy
+            consul-server-3:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "curl -f http://consul-server-1:8500/v1/status/leader || exit 1",
+                ]
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 30s
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+    patroni2:
+        build: ./postgres
+        container_name: patroni2
+        hostname: patroni2
+        networks:
+            - postgres-network
+        ports:
+            - "5433:5432"
+            - "8009:8008"
+        environment:
+            PATRONI_NAME: patroni2
+            PATRONI_SCOPE: postgres-cluster
+            PATRONI_CONSUL_HOST: consul-server-1:8500
+            PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+            PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni2:5432
+            PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+            PATRONI_RESTAPI_CONNECT_ADDRESS: patroni2:8008
+        volumes:
+            - patroni2_data:/var/lib/postgresql/data
+            - ./postgres/patroni.yml:/etc/patroni/patroni.yml
+        depends_on:
+            consul-server-1:
+                condition: service_started
+            consul-server-2:
+                condition: service_started
+            consul-server-3:
+                condition: service_started
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+    patroni3:
+        build: ./postgres
+        container_name: patroni3
+        hostname: patroni3
+        networks:
+            - postgres-network
+        ports:
+            - "5434:5432"
+            - "8010:8008"
+        environment:
+            PATRONI_NAME: patroni3
+            PATRONI_SCOPE: postgres-cluster
+            PATRONI_CONSUL_HOST: consul-server-1:8500
+            PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+            PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni3:5432
+            PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+            PATRONI_RESTAPI_CONNECT_ADDRESS: patroni3:8008
+        volumes:
+            - patroni3_data:/var/lib/postgresql/data
+            - ./postgres/patroni.yml:/etc/patroni/patroni.yml
+        depends_on:
+            consul-server-1:
+                condition: service_started
+            consul-server-2:
+                condition: service_started
+            consul-server-3:
+                condition: service_started
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+    # HAProxy for load balancing
+    haproxy:
+        image: haproxy:2.8
+        container_name: haproxy
+        networks:
+            - postgres-network
+        ports:
+            - "5000:5000" # Primary connection
+            - "5001:5001" # Replica connections
+            - "7000:7000" # HAProxy stats
+        volumes:
+            - ./postgres/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+        depends_on:
+            - patroni1
+            - patroni2
+            - patroni3
+        restart: unless-stopped
+        profiles: ["postgres"]
+
+volumes:
+    redis_data_1:
+    redis_data_2:
+    redis_data_3:
+    redis_data_4:
+    redis_data_5:
+    redis_data_6:
+    redis_cluster_creator:
+    redis_insight_data:
+    consul1_data:
+    consul2_data:
+    consul3_data:
+    patroni1_data:
+    patroni2_data:
+    patroni3_data:
+networks:
+    redis-network:
+        driver: bridge
+    postgres-network:
+        driver: bridge

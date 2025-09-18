@@ -1,0 +1,20 @@
+FROM node:24-alpine
+
+WORKDIR /app
+
+# Install netcat for connection testing
+RUN apk add --no-cache netcat-openbsd
+
+# Copy files
+COPY redis/package*.json ./
+COPY redis/generate_redis_data.js ./
+COPY redis/redis_setup.sh ./
+
+# Set script permissions
+RUN chmod +x ./redis_setup.sh
+
+# Install dependencies
+RUN npm install --verbose
+
+# Start the Redis data generation process
+CMD ["/bin/sh", "./redis_setup.sh"]
